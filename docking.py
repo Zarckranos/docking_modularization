@@ -214,11 +214,11 @@ def change_numeration_pdb(pdb_file: str, pdb_name: str) -> list[str]:
                     count_space = 3 - len(res_number_strip)
                     new_line += count_space * ' '
 
-                    file.write(f"{line[0:23]}{count_space * ' '}{str(int(res_number_strip) + qtd_code)} {line[28:]}")
+                    file.write(f"{line[0:23]} {count_space * ' '}{str(int(res_number_strip) + qtd_code)} {line[28:]}")
                     break
 
                 # nova linha copiada até Chain identifier
-                new_line += line[:23]
+                new_line += line[:23] + ' '
 
                 # Conversão de numeração (Sequencial,   letras)
                 if line[26] != ' ':
@@ -387,4 +387,19 @@ if __name__ == '__main__':
 
     rearrange_chains(anarci_path, pdb_name=ag_name, is_ab=False)
 
-    
+    # Chamada do Haddock =======================================
+    haddock = Haddock(
+        pdb_files_path=args.path,
+        antibody=antibody, 
+        antigen=antibody, 
+        ab_type=ab_type
+    )    
+
+    # Calcula residuos ati-pas ===========
+    print('>> Calculando residuos ativos e passivos...\n')
+    #haddock.interface_map()
+
+    # Criar tabela de restricao ==========
+    if haddock.ab_type == 'vhvl':
+        print('>> Restrain table...\n')
+        haddock.restrain_table()
