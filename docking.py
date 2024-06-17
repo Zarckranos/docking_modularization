@@ -326,11 +326,23 @@ if __name__ == '__main__':
         'input', metavar='STRING', type=str, nargs=2,
         help='Passe dois arquivos; 1 ab + 1 ag.'
     )
+    parser.add_argument(
+    	'-at', '--active_res', metavar='PATH', type=list[str,str],
+    	help='Lista contendo os residuos ativos da estrutura.'
+    )
+    parser.add_argument(
+    	'-ps', '--passive_res', metavar='PATH', type=list[str,str],
+    	help='Lista contendo os residuos passivos da estrutura.'
+    )
 
     args = parser.parse_args()
     # ===================================================================================
 
-    print('Script de DOCKING!')
+    print('\
+    #####################################################\\
+    '#                 Script de DOCKING!                #\\
+    '####################################################\\
+    ')
     pdb_file1 = args.path + args.input[0]
     pdb_file2 = args.path + args.input[1]
 
@@ -395,11 +407,14 @@ if __name__ == '__main__':
         ab_type=ab_type
     )    
 
-    # Calcula residuos ati-pas ===========
-    print('>> Calculando residuos ativos e passivos...\n')
-    #haddock.interface_map()
-
     # Criar tabela de restricao ==========
     if haddock.ab_type == 'vhvl':
         print('>> Restrain table...\n')
         haddock.restrain_table()
+        
+    # Calcula residuos ati-pas ===========
+    print('>> Calculando residuos ativos e passivos...\n')
+    active_res  = args.active_res
+    passive_res = args.passive_res
+    #haddock.interface_map(active_res, passive_res)
+    
