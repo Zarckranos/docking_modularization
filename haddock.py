@@ -99,8 +99,11 @@ class Haddock:
     Metodo para identificar residuios ativos e passivos atraves do FREESASA.
 
     """
-    def interface_map(self):
-        pdb_file = os.path.join(self.pdb_files_path, f'{self.ab_name}.pdb')
+    def interface_map(self, active_res, passive_res):
+    	if self.ab_type == 'vhvl':
+        	pdb_file = os.path.join(self.pdb_files_path, f'antibody_{self.ab_name}.pdb')
+        else:
+        	pdb_file = os.path.join(self.pdb_files_path, f'{self.ab_name}.pdb')
         active_rsa_file = f"{self.pdb_files_path}/{self.ab_name}_active.rsa"
         passive_rsa_file = f"{self.pdb_files_path}/{self.ab_name}_passive.rsa"
 
@@ -111,6 +114,12 @@ class Haddock:
         # Parse RSA files to get active and passive residues
         active_residues, passive_residues = self.parse_rsa(active_rsa_file)
         _, passive_residues = self.parse_rsa(passive_rsa_file)
+
+	# Verificar residuos passados pelo usuário
+	if active_res:
+		...
+	if passive_res:
+		...
 
         # Save active and passive residues to list files
         self.save_list(active_residues, f"{self.pdb_files_path}/{self.pdb_name}_active.list")
