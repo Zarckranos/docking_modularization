@@ -1,420 +1,216 @@
 import os
 import subprocess
-from argparse import ArgumentParser
-from Bio.PDB import PDBParser, PDBIO, Select
+
+from Bio.PDB import PDBParser, PDBIO
 from Bio import SeqIO
 
-from haddock import Haddock
+# HADDOCK TUTORIAL:
+# https://www.bonvinlab.org/education/HADDOCK24/HADDOCK24-local-tutorial/
+class Haddock:
+    def __init__(self, pdb_files_path, antibody, antigen, ab_type):
+        self.pdb_files_path = pdb_files_path
 
-def write_log(log, log_file):
-    with open(log_file, 'w') as file:
-        for line in log:
-            file.write(line + "\n")
+        self.ab = antibody
+        self.ag = antigen
+        self.ab_type = ab_type
 
-"""
-Função para aplicar limpeza em um arquivo PDB de modo a preparar para o Haddock.
-Mantendos apenas linhas com ATOM, TER e END.
+        self.ab_name = antibody.split('/')[-1].split('.')[0]
+        self.ag_name = antigen.split('/')[-1].split('.')[0]
 
-Parameters:
-    pdb_file: [path + pdb_name.pdb]
-"""
-def cleaning_pdb(pdb_file: str):
-    lines = []
-    with open(pdb_file, 'r') as file:
-        for line in file:
-            if line.startswith("ATOM") or line.startswith("TER") or line.startswith("END"):
-                lines.append(line)
+    """
+    Metodo para criar tabela de restricao e criar o arquivo unambig. Para isso,
+    e preciso renumerar a cadeia leve, dando um shift de 500 em sua numeracao 
+    """
+    def restrain_table(self):
+        def renumber_pdb(input_pdb, output_pdb, shift):
+            parser = PDBParser(QUIET=True)
+            structure = parser.get_structure('structure', input_pdb)
 
-    with open(pdb_file, 'w') as out_file:
-        for line in lines:
-            out_file.write(line)
-
-"""
-Função para extrair e criar arquivo com a sequencia fasta do pdb.
-
-Parameters:
-    pdb_file: [path + pdb_name.pdb]
-    pdb_name: nome do arquivo pdb
-    output_path: caminho da pasta para os arquivos fasta
-
-Returns:
-    fasta_path: caminho de pasta contendo os arquivos fasta
-"""
-def extract_fasta(pdb_file: str, pdb_name: str, output_path: str) -> str:
-    # Retorna iterador da seq. do arquivo de entrada
-    with open(pdb_file) as handle:
-        sequences = list(SeqIO.parse(handle, "pdb-atom"))
-
-    fasta_file = f'{pdb_name}.fasta'
-    fasta_path = os.path.join(output_path, fasta_file)
-    # Criar arquivo .fasta na subpasta './fasta_files'
-    with open(fasta_path, "w") as output_handle:
-        SeqIO.write(sequences, output_handle, "fasta")
-
-    return fasta_path
-
-"""
-Função para criar chamada do ANARCI e criar arquivo .anarci do pdb
-
-Parameters:
-    fasta_path: caminho da pasta contendo o arquivo fasta
-    pdb_name: nome do arquivo pdb
-    output_path: caminho da pasta para os arquivo anarci
-
-Returns:
-    anarci_path: caminho da pasta contendo os arquivo anarci
-"""
-def create_anarci_file(fasta_path: str, pdb_name: str, output_path: str) -> str:
-    anarci_file = subprocess.run(f"ANARCI -i {fasta_path}", shell=True, capture_output=True).stdout.decode('utf-8')
-
-    anarci_name = f'{pdb_name}.anarci'
-    anarci_path = os.path.join(output_path, anarci_name)
-    with open(anarci_path, 'w') as file:
-        file.write(anarci_file)
-
-    return anarci_path
-
-"""
-Função para identificar se um arquivo pdb é anticorpo ou não.
-
-Parameters:
-    pdb_file: [path + pdb_name.pdb]
-
-Returns:
-    bool: True se for anticorpo; False caso seja antigeno.
-"""
-def is_ab_ag(pdb_file: str) -> bool:
-    pdb_name = pdb_file.split('/')[-1].split('.')[0]
-
-    # Caminho temp para os arquivos fasta e anarci
-    output_path = os.path.join('temp', pdb_name)
-    if not os.path.exists(output_path):
-        if not os.path.exists('temp'):
-            os.mkdir("temp")
-        os.mkdir(output_path)
-
-    fasta_path = extract_fasta(pdb_file=pdb_file, pdb_name=pdb_name, output_path=output_path)
-    anarci_path = create_anarci_file(fasta_path=fasta_path, pdb_name=pdb_name, output_path=output_path)
-
-    with open(anarci_path, 'r') as file:
-        lines = file.readlines()
-
-    # Não preciso ler todo o arquivo
-    for line in lines:
-        if line[0] != "#":
-            return True if line[0] != "/" else False
-
-"""
-Função para identificar se o anticorpo é VH/VL, scFv ou nanocorpo a
-partir do arquivo .anarci
-
-Parameters:
-    anarci_file: caminho do arquivo anarci
-
-Returns:
-    ab_type: tipo de construção do anticorpo; ERROR caso entrada não prevista
-"""
-def identify_ab_construction(anarci_file: str) -> str:
-    with open(anarci_file, 'r') as file:
-        lines = file.readlines()
-    
-    count_chain = 0
-    for line in lines:
-        if line[0] == "#":
-            if "# Domain 1 of 1" in line:
-                count_chain += 1
-            elif "# Domain 1 of 2" in line:
-                ab_type = 'scfv'
-                return 0
-    
-    if count_chain == 1:
-        ab_type = 'vhh'
-    elif count_chain == 2:
-        ab_type = 'vhvl'
-    else:
-        print("Entrada nao prevista no algoritmo")
-        print(f"Total de cadeias contadas igual a {count_chain}.")
-        return 'ERROR'
-    return ab_type
-    
-"""
-Função para modificar o nomeclativo: conversão Amber p/ formato pdb
-
-Parameters:
-    pdb_file: [path + pdb_name.pdb]
-
-Returns:
-    res_log: lista contendo as linhas que foram modificadas
-"""
-def modify_pdb_residues(pdb_file: str) -> list[str]:
-    parser = PDBParser(QUIET=True)
-    structure = parser.get_structure('structure', pdb_file)
-
-    log = []
-    for model in structure:
-        for chain in model:
-            for residue in chain:
-                if residue.resname in ['HIE', 'HID', 'HIP']:
-                    original_line = f"Chain {chain.id}, Residue {residue.id}, Original {residue.resname}"
-                    log.append(original_line)
-                    residue.resname = 'HIS'
-                elif residue.resname in ['CYX']:
-                    original_line = f"Chain {chain.id}, Residue {residue.id}, Original {residue.resname}"
-                    log.append(original_line)
-                    residue.resname = 'CYS'
-    
-    io = PDBIO()
-    io.set_structure(structure)
-    io.save(pdb_file)
-
-    return log
-
-"""
-Função para modificar a numeração do arquivo pdb, removendo as letras que vem
-apos a numeração e continuando a sequencia.
-
-Parameters:
-    pdb_file: [path + pdb_name.pdb]
-
-Returns:
-    files_path: caminho dos arquivos pdbs separados por cadeias
-"""
-def change_numeration_pdb(pdb_file: str, pdb_name: str) -> list[str]:
-    parser     = PDBParser(QUIET=True)
-    io         = PDBIO()
-    structure  = parser.get_structure(pdb_name, pdb_file)
-    pdb_chains = structure.get_chains()
-
-    files_path  = [] # Contem caminho dos arquivos das cadeias
-    # Remover cabeçalho =============================================
-    for chain in pdb_chains:
-        io.set_structure(chain)
-        chain_file = structure.get_id() + "_" + chain.get_id() + ".pdb"
-
-        files_path.append(chain_file)
-
-        io.save(chain_file)
-
-    for file_path in files_path:
-        with open(file_path, 'r') as file:
-            # Ler e grava todas as linhas do pdb numa lista
-            lines = file.readlines()
-
-        with open(file_path, 'w') as file:
-            res_code   = ' '   # code for insertions of residues
-            conversao  = False # indicativo para converter numeração
-            qtd_code   = 0     # contador de quantos code apareceram
-
-            for line in lines:
-                new_line = ""
-
-                # Verificar se está no fim do arquivo
-                if line[0:3] == 'TER':
-                    res_number_strip = line[23:26].strip()
-                    count_space = 3 - len(res_number_strip)
-                    new_line += count_space * ' '
-
-                    file.write(f"{line[0:23]} {count_space * ' '}{str(int(res_number_strip) + qtd_code)} {line[28:]}")
-                    break
-
-                # nova linha copiada até Chain identifier
-                new_line += line[:23] + ' '
-
-                # Conversão de numeração (Sequencial,   letras)
-                if line[26] != ' ':
-                    if line[26] != res_code:
-                        qtd_code += 1
-
-                    res_code = line[26]
-                    conversao = True
-                elif line[26] == ' ' and conversao:
-                    res_code = ' '
-                    conversao = False
-
-                # Adicionar espaços pela diferença de tamanho das strings
-                res_number_strip = line[23:26].strip()
-                count_space = 3 - len(res_number_strip)
-                new_line += count_space * ' '
-
-                new_line += str(int(res_number_strip) + qtd_code)
-
-                # Preenche até final da linha
-                new_line += ' ' + line[28:]
-
-                file.write(new_line)
-    
-    return files_path
-
-"""
-Renomeia o nome da cadeia do arquivo de estrutura .pdb para o formato
-HADDOCK. Cadeia pesada = H, Cadeia leve = L e VHH = H. 
-Caso seja antigeno muda para alguma letra exceto H ou L
-
-Parameters:
-    pdb_file: [path + pdb_name.pdb]
-    is_ab: True se for anticorpo; False se for antigeno
-    ab_type: tipo de construção do anticorpo
-    chain_id: id da cadeia com base do arquivo anarci
-"""
-def rename_chain(pdb_file: str, is_ab: bool, ab_type: str, chain_id: str):
-    with open(pdb_file, 'r') as file:
-        lines = file.readlines()
-
-    new_line = ''
-    with open(pdb_file, 'w') as file:
-        for line in lines:
-            if is_ab:
-                if ab_type == 'vhh':
-                    new_line = line[:21] + 'H' + line[23:]
-                else:
-                    new_line = line[:21] + chain_id + line[23:]
-            else:
-                new_line = line[:21] + chain_id + line[23:]
+            for model in structure:
+                for chain in model:
+                    for residue in chain:
+                        new_id = (' ', residue.id[1] + shift, ' ')
+                        residue.id = new_id
             
-            file.write(new_line)
+            io = PDBIO()
+            io.set_structure(structure)
+            io.save(output_pdb)
 
-"""
-Método para Realizar a reorganização das caideas (Ab / Ag).
-Renomear o identificador das Cadeias, Renumerar e Fundir.
+        def combine_pdbs(file1, file2, output_pdb):
+            with open(output_pdb, 'w') as output_file:
+                with open(file1) as infile1:
+                    lines1 = infile1.readlines()
+                    # Remover a linha "END" do primeiro PDB
+                    if lines1[-1].startswith("END"):
+                        lines1 = lines1[:-1]
+                    output_file.writelines(lines1)
+                
+                with open(file2) as infile2:
+                    lines2 = infile2.readlines()
+                    output_file.writelines(lines2)
 
-Parameters:
-    anarci_path: caminho para o arquivo anarci
-    pdb_name: nome do arquivo pdb
-    is_ab: True se for anticorpo; False se for antigeno
-    ab_type: tipo de cosntrução do anticorpo
-"""
-def rearrange_chains(anarci_path: str, pdb_name: str, is_ab: bool, ab_type: str='ag'):
-    with open(anarci_path, 'r') as file:
-        anarci_lines = file.readlines()
+        pdb_h = f'{self.ab_name}_H'
+        pdb_h_path = os.path.join(self.pdb_files_path, f'{pdb_h}.pdb')
+        pdb_l = f'{self.ab_name}_L'
+        pdb_l_path = os.path.join(self.pdb_files_path, f'{pdb_l}.pdb')
 
-    structure_name = ''
-    ag_list = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'I', 'J', 'K']
-    count = 0
-    aux = False # Indicativo para pegar o caminho do arquivo
-    for line in anarci_lines:
-        if not aux:
-            structure_id = line.split(':')[1].strip()
-            structure_name = f'{pdb_name}_{structure_id}.pdb'
-            file_path = os.path.join('./', structure_name)
-            aux = True
+        # Renumerar cadeias
+        pdb_h_shift_path = f'{pdb_h_path[:-4]}_shift.pdb'
+        pdb_l_shift_path = f'{pdb_l_path[:-4]}_shift.pdb'
 
-        # Fim da leitura do residuo
-        if line[:2] == '//':
-            if is_ab:
-                rename_chain(file_path, is_ab=True, ab_type=ab_type, chain_id=chain_id)
-            else:
-                rename_chain(file_path, is_ab=False, ab_type=ab_type, chain_id=ag_list[count])
-                count += 1
-            
-            aux = False
-        else:
-            if(line[0] != "#"):
-                chain_id = line[0]
+        renumber_pdb(pdb_h_path, pdb_h_shift_path, 0)
+        renumber_pdb(pdb_l_path, pdb_l_shift_path, 500)
 
-if __name__ == '__main__':
-    # Argumentos de passagem para inicialização =========================================
-    parser = ArgumentParser(description='Processo de Docking através do Haddock 2.4.')
-    parser.set_defaults(
-        path = './'
-    )
+        # Juntar arquivos PDB
+        combined_pdb_path = os.path.join(self.pdb_files_path, f'antibody_{self.ab_name}.pdb')
+        combine_pdbs(pdb_h_shift_path, pdb_l_shift_path, combined_pdb_path)
 
-    parser.add_argument(
-        '-p', '--path', metavar='STRING', type=str,
-        help='Endereço da pasta dos arquivos de entrada.'
-    )
-    parser.add_argument(
-        'input', metavar='STRING', type=str, nargs=2,
-        help='Passe dois arquivos; 1 ab + 1 ag.'
-    )
-    parser.add_argument(
-    	'-at', '--active_res', metavar='PATH', type=list[str,str],
-    	help='Lista contendo os residuos ativos da estrutura.'
-    )
-    parser.add_argument(
-    	'-ps', '--passive_res', metavar='PATH', type=list[str,str],
-    	help='Lista contendo os residuos passivos da estrutura.'
-    )
+        # Executar script externo
+        self.unambig_path = os.path.join(self.pdb_files_path, f'antibody_{self.pdb_name}-unambig.tbl')
+        subprocess.run(["python", "restrain_bodies.py", combined_pdb_path], stdout=open(unambig_path, 'w'), check=True)
 
-    args = parser.parse_args()
-    # ===================================================================================
+    def run_freesasa(self, pdb_file, rsa_file):
+        command = f"freesasa {pdb_file} --format=rsa {rsa_file}"
+        subprocess.run(command, shell=True, check=True)
 
-    print('\
-    #####################################################\\
-    '#                 Script de DOCKING!                #\\
-    '####################################################\\
-    ')
-    pdb_file1 = args.path + args.input[0]
-    pdb_file2 = args.path + args.input[1]
+    def parse_rsa(self, rsa_file, threshold=40):
+        active_residues = []
+        passive_residues = []
+        with open(rsa_file, 'r') as file:
+            for line in file:
+                columns = line.split()
+                if len(columns) in [13, 14]:  # Considera lines com 13 ou 14 colunas
+                    sasa_all_atoms = float(columns[7]) if len(columns) == 13 else float(columns[8])
+                    sasa_side_chain = float(columns[9]) if len(columns) == 13 else float(columns[10])
+                    if sasa_all_atoms > threshold or sasa_side_chain > threshold:
+                        residue = columns[3] if len(columns) == 13 else columns[4]
+                        active_residues.append(residue)
+                    else:
+                        residue = columns[3] if len(columns) == 13 else columns[4]
+                        passive_residues.append(residue)
+        return active_residues, passive_residues
 
-    # Realizar a limpeza dos arquivos PDBs =====================
-    print('>> Limpeza e tratamento de arquivos . . .')
-    cleaning_pdb(pdb_file1)
-    cleaning_pdb(pdb_file2)
-
-    # Identificar quais arquivos são anticorpo e antigeno ======
-    # Criar caminho temp para os arquivos fasta e anarci
-    temp_path = os.path.join('./', 'temp')
-    if not os.path.exists(temp_path):
-        os.mkdir(temp_path)
-
-    if is_ab_ag(pdb_file1):
-        antibody = pdb_file1
-        antigen  = pdb_file2
-    else: 
-        antibody = pdb_file2
-        antigen  = pdb_file1
-
-    is_ab_ag(pdb_file2)
-
-    ab_name = antibody.split('/')[-1].split('.')[0]
-    ag_name = antigen.split('/')[-1].split('.')[0]
-
-    # Some processament ========================================
-    # Criar caminho para os arquivos de log
-    log_path = os.path.join('./', 'log')
-    if not os.path.exists(log_path):
-        os.mkdir(log_path)
-
-    # Modificar nomeclativo dos residuos
-    log = modify_pdb_residues(antibody)
-    log_file = os.path.join(log_path, f'log_res_{ab_name}.txt')
-    write_log(log, log_file)
-    log = modify_pdb_residues(antigen)
-    log_file = os.path.join(log_path, f'log_res_{ag_name}.txt')
-    write_log(log, log_file)
-
-    # Modificar numeração dos pdbs
-    ab_chains_path = change_numeration_pdb(antibody, ab_name)
-    ag_chains_path = change_numeration_pdb(antigen, ag_name)
-
-    # Preparamento para o Haddock ==============================
-    anarci_path = os.path.join(temp_path, f'{ab_name}')
-    anarci_path = os.path.join(anarci_path, f'{ab_name}.anarci')
-    ab_type = identify_ab_construction(anarci_file=anarci_path)
-
-    rearrange_chains(anarci_path, pdb_name=ab_name, is_ab=True, ab_type=ab_type)
-
-    anarci_path = os.path.join(temp_path, f'{ag_name}')
-    anarci_path = os.path.join(anarci_path, f'{ag_name}.anarci')
-
-    rearrange_chains(anarci_path, pdb_name=ag_name, is_ab=False)
-
-    # Chamada do Haddock =======================================
-    haddock = Haddock(
-        pdb_files_path=args.path,
-        antibody=antibody, 
-        antigen=antibody, 
-        ab_type=ab_type
-    )    
-
-    # Criar tabela de restricao ==========
-    if haddock.ab_type == 'vhvl':
-        print('>> Restrain table...\n')
-        haddock.restrain_table()
+    def save_list(self, residues, filename):
+        with open(filename, 'w') as file:
+            file.write(" ".join(residues))
         
-    # Calcula residuos ati-pas ===========
-    print('>> Calculando residuos ativos e passivos...\n')
-    active_res  = args.active_res
-    passive_res = args.passive_res
-    #haddock.interface_map(active_res, passive_res)
-    
+
+    """
+    Metodo para identificar residuios ativos e passivos atraves do FREESASA.
+
+    """
+    def interface_map(self, active_res, passive_res, dock_type):
+        if self.ab_type == 'vhvl':
+            # (antibody_{self.ab_name}.pdb) -> arquivo combinado com H-chian e L-chain
+            pdb_file = os.path.join(self.pdb_files_path, f'antibody_{self.ab_name}.pdb')
+        else:
+            pdb_file = os.path.join(self.pdb_files_path, f'{self.ab_name}.pdb')
+        active_rsa_file = f"{self.pdb_files_path}/{self.ab_name}_active.rsa"
+        #passive_rsa_file = f"{self.pdb_files_path}/{self.ab_name}_passive.rsa"
+
+        # Run FREESASA to calculate SASA
+        self.run_freesasa(pdb_file, pdb_file, active_rsa_file)
+        #self.run_freesasa(pdb_file, pdb_file, passive_rsa_file)
+
+        # Parse RSA files to get active and passive residues
+        active_residues, passive_residues = self.parse_rsa(active_rsa_file)
+        #_, passive_residues = self.parse_rsa(passive_rsa_file)
+
+        # Verificar residuos passados pelo usuário
+        if active_res:
+            ...
+        if passive_res:
+            ...
+
+        # Save active and passive residues to list files
+        self.save_list(active_residues, f"{self.pdb_files_path}/{self.pdb_name}_active.list")
+        # self.save_list(passive_residues, f"{self.pdb_files_path}/{self.pdb_name}_passive.list")
+
+        print(f"Active residues saved to {self.pdb_files_path}/{self.pdb_name}_active.list")
+
+    """
+    Método para geração de arquivos de restrição ambig entre ag e ab.
+    """
+    def ambig_table(self):
+        command = f"active-passive-to-ambig.py antibody_{pdb_name}.list"
+        subprocess.run(command, shell=True, check=True)
+
+    """
+    Método para criar arquivo run.param.
+    """
+    def create_rum_param(self):
+        segid_1 = ''
+        if ab.type == 'vhvl':
+            segid_1 = 'H,L'
+        elif ab.type == 'scfv':
+            sigid_1 = 'S'
+        elif ab.type == 'vhh':
+            segid_1 = 'h'
+
+        run_param_content = f"""\
+AMBIG_TBL={self.ambig_path}
+HADDOCK_DIR=/usr/local/softwares/haddock/2.4/
+N_COMP=2
+PDB_FILE1={self.ab}
+PDB_FILE2={self.ag}
+PROJECT_DIR={self.pdb_files_path}
+PROT_SEGID_1={segid_1}
+PROT_SEGID_2=A
+RUN_NUMBER=1
+UNAMBIG_TBL={self.unambig.path}
+        """
+
+        with open('run.param', 'w') as file:
+            file.write(run_param_content)
+
+    def create_haddock_condor_sub(self):
+        content = f"""
+Universe = vanilla
+Environment = SHELL=/usr/bin/bash;PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Executable = haddock-condor.sh
+
+output = job.out.\$(Process)
+error = job.error.\$(Process)
+log = job.log.\$(Process)
+
+requirements = (Machine != \"prainha\")
+
+#Transferring Input Files
+should_transfer_files = YES
+when_to_transfer_output = ON_EXIT
+
+transfer_input_files = ${folder}/${pdb_cdr}/antigeno_otimizado.pdb, ${folder}/${pdb_cdr}/haddock-condor.sh, ${folder}/${pdb_cdr}/anticorpo_otimizado.pdb, ${folder}/${pdb_cdr}/run.param, ${folder}/${pdb_cdr}/$list_ag, ${folder}/${pdb_cdr}/antibody_${reduced_name}-residuos-das-CDR.list, ${folder}/${pdb_cdr}/antibody-antigen-ambig.tbl, ${folder}/${pdb_cdr}/antibody_${reduced_name}-unambig.tbl, ${folder}/${pdb_cdr}/run-haddock.sh, ${folder}/${pdb_cdr}/antigeno_HISTIDINAS.txt, ${folder}/${pdb_cdr}/anticorpo_HISTIDINAS.txt
+
+#Transferring Output Files
+should_transfer_files = yes
+when_to_transfer_output = ON_EXIT
+transfer_output_files = run1
+
+request_cpus = 12
+Queue 1
+        """
+
+        with open('haddock-condor.sub', 'w') as file:
+            file.write(content)
+
+    """
+    Método para criar arquivo hrun-addock.sh
+    """
+    def create_run_haddock_sh(self):
+        content = """
+#!/bin/bash
+#sleep 15m
+
+#source /usr/share/modules/init/bash
+module load Haddock/2.4
+echo $PATH
+echo $LD_LIBRARY_PATH
+echo $PYTHONPATH
+echo $HADDOCK
+
+python2 \$HADDOCK/Haddock/RunHaddock.py
+        """
+
+        with open('run-haddock.sh', 'w') as file:
+            file.write(content)
+
